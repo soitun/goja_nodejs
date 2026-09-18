@@ -3,10 +3,10 @@ package url
 import (
 	"math"
 	"net/url"
-	"path"
 	"reflect"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/errors"
@@ -165,6 +165,10 @@ func setURLPort(nu *nodeURL, v goja.Value) {
 }
 
 func (m *urlModule) parseURL(s string, isBase bool) *url.URL {
+	s = strings.TrimSpace(s)
+	if len(s) >= 8 && strings.EqualFold(s[:7], "file://") && s[7] != '/' {
+		s = s[:7] + "/" + s[7:]
+	}
 	u, err := url.Parse(s)
 	if err != nil {
 		if isBase {
@@ -194,12 +198,99 @@ func fixRawQuery(u *url.URL) {
 	}
 }
 
+// removeDotSegments implements the path-normalization portion of the WHATWG
+// URL Standard's "path state" (https://url.spec.whatwg.org/#path-state).
+//
+// Unlike path.Clean, which always strips a trailing slash, this walks the
+// path one segment at a time and treats each segment differently depending
+// on whether it ended at a "/" or at end-of-string:
+//
+//   - "..": pop the previous segment ("shorten the path"). If this segment
+//     ran to the end of the string (no trailing "/"), an empty segment is
+//     appended — which is what produces the trailing slash. If it was
+//     followed by more segments (i.e. it ended at a "/"), nothing extra is
+//     appended, because the next segment will supply whatever comes after.
+//   - ".": dropped. Same end-of-string rule: if it was the last segment,
+//     an empty one is appended so the path still ends in "/".
+//   - anything else: kept as-is, including empty segments from "//".
+func removeDotSegments(path, proto string) string {
+	if path == "" {
+		return "/"
+	}
+
+	rest := strings.TrimPrefix(path, "/")
+
+	buf := make([]byte, 1, len(rest)+1)
+	buf[0] = '/'
+	starts := make([]int, 0, strings.Count(rest, "/")+1)
+
+	for {
+		seg, remainder, found := strings.Cut(rest, "/")
+		last := !found
+
+		if len(buf) == 1 && proto == "file" {
+			if len(seg) >= 2 && seg[1] == '|' && (seg[0] >= 'a' && seg[0] <= 'z' || seg[0] >= 'A' && seg[0] <= 'Z') {
+				seg = seg[:1] + ":" + seg[2:]
+			}
+		}
+
+		switch {
+		case isDoubleDot(seg):
+			if n := len(starts); n > 0 {
+				start := starts[n-1]
+				starts = starts[:n-1]
+				if start > 1 {
+					buf = buf[:start-1] // drop the segment and its leading "/"
+				} else {
+					buf = buf[:1] // back to just the root "/"
+				}
+			}
+			if last {
+				// Push an empty segment inline
+				if len(buf) > 1 {
+					buf = append(buf, '/')
+				}
+			}
+		case isSingleDot(seg):
+			if last {
+				if len(buf) > 1 {
+					buf = append(buf, '/')
+				}
+			}
+		default:
+			if len(buf) > 1 {
+				buf = append(buf, '/')
+			}
+			starts = append(starts, len(buf))
+			buf = append(buf, seg...)
+		}
+
+		if last {
+			break
+		}
+		rest = remainder
+	}
+
+	return unsafe.String(unsafe.SliceData(buf), len(buf))
+}
+
+func isSingleDot(s string) bool {
+	return strings.EqualFold(s, ".") || strings.EqualFold(s, "%2e")
+}
+
+func isDoubleDot(s string) bool {
+	return strings.EqualFold(s, "..") ||
+		strings.EqualFold(s, ".%2e") ||
+		strings.EqualFold(s, "%2e.") ||
+		strings.EqualFold(s, "%2e%2e")
+}
+
 func cleanPath(p, proto string) string {
 	if !strings.HasPrefix(p, "/") && (isSpecialProtocol(proto) || p != "") {
 		p = "/" + p
 	}
 	if p != "" {
-		return path.Clean(p)
+		return removeDotSegments(p, proto)
 	}
 	return ""
 }

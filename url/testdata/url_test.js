@@ -19,6 +19,7 @@ testURLCtorBase("foo:Example.com/", "https://example.org/", "foo:Example.com/");
 testURLCtorBase("#hash", "https://example.org/", "https://example.org/#hash");
 
 testURLCtor("HTTP://test.com", "http://test.com/");
+testURLCtor("  HTTP://test.com ", "http://test.com/");
 testURLCtor("HTTPS://á.com", "https://xn--1ca.com/");
 testURLCtor("HTTPS://á.com:123", "https://xn--1ca.com:123/");
 testURLCtor("https://test.com#asdfá", "https://test.com/#asdf%C3%A1");
@@ -260,3 +261,39 @@ assert.sameValue(myURL.toString(), "https://example.com/?first=one");
     url.pathname = 'domain.com Domain:user@domain.com';
     assert.sameValue(url.toString(), 'otpauth://totp/domain.com%20Domain:user@domain.com');
 }
+
+{
+  const cases = [
+    ["/foo/", "/foo/", "/foo/"],
+    ["/foo", "/foo", "/foo"],
+    ["", "/", ""],
+    ["/", "/", "/"],
+    ["/foo/../", "/", "/"],
+    ["/foo/..", "/", "/"],
+    ["/foo/.", "/foo/", "/foo/"],
+    ["/foo/bar/../", "/foo/", "/foo/"],
+    ["/a/b/c/../../", "/a/", "/a/"],
+    ["/foo//bar", "/foo//bar", "/foo//bar"],
+    ["/foo/%2e.", "/", "/"],
+    ["/foo/%2e%2e", "/", "/"],
+    ["/foo/%2e%2e%2b", "/foo/%2e%2e%2b", "/foo/%2e%2e%2b"],
+  ];
+
+  for (const c of cases) {
+    const special = new URL(`https://host${c[0]}`);
+    const nonSpecial = new URL(`xx://host${c[0]}`);
+    assert.sameValue(special.pathname, c[1]);
+    assert.sameValue(nonSpecial.pathname, c[2]);
+
+    assert.sameValue(special.href, `https://host${c[1]}`);
+    assert.sameValue(nonSpecial.href, `xx://host${c[2]}`);
+  }
+}
+
+assert.sameValue(new URL('file:///').href, 'file:///')
+assert.sameValue(new URL('file://').href, 'file:///')
+
+assert.sameValue(new URL('file:///c:').pathname, '/c:');
+assert.sameValue(new URL('file://c:').pathname, '/c:');
+assert.sameValue(new URL('file:///c|').pathname, '/c:');
+assert.sameValue(new URL('file://c|').pathname, '/c:');
